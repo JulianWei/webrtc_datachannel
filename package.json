@@ -1,0 +1,24 @@
+{
+  "name": "webrtc_datachannel",
+  "version": "0.1.0",
+  "description": "This project presents a few example applications using node-webrtc.",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "lint": "eslint index.js examples lib test",
+    "start": "node client.js",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "tape 'test/unit/**/*.js'",
+    "test:integration": "tape 'test/integration/**/*.js'"
+  },
+  "keywords": [
+    "Web",
+    "Audio"
+  ],
+  "author": "Mark Andrus Roberts <markandrusroberts@gmail.com>",
+  "license": "BSD-3-Clause",
+  "dependencies": {
+    "wrtc": "^0.4.1",
+    "ws": "^7.2.0"
+  }
+}
