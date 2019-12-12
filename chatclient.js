@@ -11,9 +11,25 @@
 
 "use strict";
 
+module.exports = {
+  connect,
+  invite,
+  sendMessage
+}
+
+const WebSocket = require('ws');
+const serverUrl = "wss://localhost:6503" //wss is secure websocket 
+
+const  wrtc = require('wrtc');
+var RTCPeerConnection = wrtc.RTCPeerConnection;
+var RTCSessionDescription = wrtc.RTCSessionDescription;
+var RTCIceCandidate = wrtc.RTCIceCandidate;
+
+
+
 // Get our hostname
 
-var myHostname = window.location.hostname;
+var myHostname = null;
 if (!myHostname) {
   myHostname = "localhost";
 }
@@ -24,39 +40,15 @@ log("Hostname: " + myHostname);
 var connection = null;
 var clientID = 0;
 
-// The media constraints object describes what sort of stream we want
-// to request from the local A/V hardware (typically a webcam and
-// microphone). Here, we specify only that we want both audio and
-// video; however, you can be more specific. It's possible to state
-// that you would prefer (or require) specific resolutions of video,
-// whether to prefer the user-facing or rear-facing camera (if available),
-// and so on.
-//
-// See also:
-// https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamConstraints
-// https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia
-//
-
-var mediaConstraints = {
-  audio: true,            // We want an audio track
-  video: {
-    aspectRatio: {
-      ideal: 1.333333     // 3:2 aspect is preferred
-    }
-  }
-};
-
-var myUsername = null;
+var myUsername = null
 var targetUsername = null;      // To store username of other peer
 var myPeerConnection = null;    // RTCPeerConnection
-var transceiver = null;         // RTCRtpTransceiver
-var webcamStream = null;        // MediaStream from webcam
+var dataChannel = null;
 
 // Output logging information to console.
 
 function log(text) {
   var time = new Date();
-
   console.log("[" + time.toLocaleTimeString() + "] " + text);
 }
 
@@ -64,7 +56,6 @@ function log(text) {
 
 function log_error(text) {
   var time = new Date();
-
   console.trace("[" + time.toLocaleTimeString() + "] " + text);
 }
 
@@ -83,8 +74,6 @@ function sendToServer(msg) {
 // this function sends a "username" message to set our username for this
 // session.
 function setUsername() {
-  myUsername = document.getElementById("name").value;
-
   sendToServer({
     name: myUsername,
     date: Date.now(),
@@ -95,124 +84,96 @@ function setUsername() {
 
 // Open and configure the connection to the WebSocket server.
 
-function connect() {
-  var serverUrl;
-  var scheme = "ws";
-
-  // If this is an HTTPS connection, we have to use a secure WebSocket
-  // connection too, so add another "s" to the scheme.
-
-  if (document.location.protocol === "https:") {
-    scheme += "s";
-  }
-  serverUrl = scheme + "://" + myHostname + ":6503";
+function connect(userName) {
 
   log(`Connecting to server: ${serverUrl}`);
-  connection = new WebSocket(serverUrl, "json");
+  myUsername = userName;
 
-  connection.onopen = function(evt) {
-    document.getElementById("text").disabled = false;
-    document.getElementById("send").disabled = false;
-  };
+  return new Promise(function(resolve, reject) {
+    connection = new WebSocket(serverUrl, {
+      protocol:"json",
+      // protocolVersion: 8,
+      // origin: 'https://localhost:6503',
+      rejectUnauthorized: false
+    });
 
-  connection.onerror = function(evt) {
-    console.dir(evt);
-  }
 
-  connection.onmessage = function(evt) {
-    var chatBox = document.querySelector(".chatbox");
-    var text = "";
-    var msg = JSON.parse(evt.data);
-    log("Message received: ");
-    console.dir(msg);
-    var time = new Date(msg.date);
-    var timeStr = time.toLocaleTimeString();
+    connection.onopen = function(evt) {
+      log("wsConnection.onOpen")
+    };
 
-    switch(msg.type) {
-      case "id":
-        clientID = msg.id;
-        setUsername();
-        break;
-
-      case "username":
-        text = "<b>User <em>" + msg.name + "</em> signed in at " + timeStr + "</b><br>";
-        break;
-
-      case "message":
-        text = "(" + timeStr + ") <b>" + msg.name + "</b>: " + msg.text + "<br>";
-        break;
-
-      case "rejectusername":
-        myUsername = msg.name;
-        text = "<b>Your username has been set to <em>" + myUsername +
-          "</em> because the name you chose is in use.</b><br>";
-        break;
-
-      case "userlist":      // Received an updated user list
-        handleUserlistMsg(msg);
-        break;
-
-      // Signaling messages: these messages are used to trade WebRTC
-      // signaling information during negotiations leading up to a video
-      // call.
-
-      case "video-offer":  // Invitation and offer to chat
-        handleVideoOfferMsg(msg);
-        break;
-
-      case "video-answer":  // Callee has answered our offer
-        handleVideoAnswerMsg(msg);
-        break;
-
-      case "new-ice-candidate": // A new ICE candidate has been received
-        handleNewICECandidateMsg(msg);
-        break;
-
-      case "hang-up": // The other peer has hung up the call
-        handleHangUpMsg(msg);
-        break;
-
-      // Unknown message; output to console for debugging.
-
-      default:
-        log_error("Unknown message received:");
-        log_error(msg);
+    connection.onerror = function(evt) {
+      console.log('wsConnection.onerror : %o', evt);
+      reject(evt);
     }
 
-    // If there's text to insert into the chat buffer, do so now, then
-    // scroll the chat panel so that the new text is visible.
+    connection.onmessage = function(evt) {
+      var text = "";
+      var msg = JSON.parse(evt.data);
+      log("Message received: ");
+      console.dir(msg);
+      var time = new Date(msg.date);
+      var timeStr = time.toLocaleTimeString();
 
-    if (text.length) {
-      chatBox.innerHTML += text;
-      chatBox.scrollTop = chatBox.scrollHeight - chatBox.clientHeight;
-    }
-  };
+      switch(msg.type) {
+        case "id":
+          clientID = msg.id;
+          setUsername();
+          break;
+
+        case "username":
+          text = "<b>User <em>" + msg.name + "</em> signed in at " + timeStr + "</b><br>";
+          
+          break;
+
+        case "message":
+          text = "(" + timeStr + ") <b>" + msg.name + "</b>: " + msg.text + "<br>";
+          break;
+
+        case "rejectusername":
+          myUsername = msg.name;
+          text = "<b>Your username has been set to <em>" + myUsername +
+            "</em> because the name you chose is in use.</b><br>";
+          break;
+
+        case "userlist":      // Received an updated user list
+          //handleUserlistMsg(msg);
+          resolve(connection);
+          break;
+
+        // Signaling messages: these messages are used to trade WebRTC
+        // signaling information during negotiations leading up to a video
+        // call.
+
+        case "video-offer":  // Invitation and offer to chat
+          handleVideoOfferMsg(msg);
+          break;
+
+        case "video-answer":  // Callee has answered our offer
+          handleVideoAnswerMsg(msg);
+          break;
+
+        case "new-ice-candidate": // A new ICE candidate has been received
+          handleNewICECandidateMsg(msg);
+          break;
+
+        case "hang-up": // The other peer has hung up the call
+          handleHangUpMsg(msg);
+          break;
+
+        // Unknown message; output to console for debugging.
+
+        default:
+          log_error("Unknown message received:");
+          log_error(msg);
+      }
+
+      //TODO: maybe process normal messages from websocket server 
+    };
+  });
 }
 
-// Handles a click on the Send button (or pressing return/enter) by
-// building a "message" object and sending it to the server.
-function handleSendButton() {
-  var msg = {
-    text: document.getElementById("text").value,
-    type: "message",
-    id: clientID,
-    date: Date.now()
-  };
-  sendToServer(msg);
-  document.getElementById("text").value = "";
-}
-
-// Handler for keyboard events. This is used to intercept the return and
-// enter keys so that we can call send() to transmit the entered text
-// to the server.
-function handleKey(evt) {
-  if (evt.keyCode === 13 || evt.keyCode === 14) {
-    if (!document.getElementById("send").disabled) {
-      handleSendButton();
-    }
-  }
-}
-
+// ------------ WebRTC world begins ------
 // Create the RTCPeerConnection which knows how to talk to our
 // selected STUN/TURN server and then uses getUserMedia() to find
 // our camera and microphone and add that stream to the connection for
@@ -228,15 +189,17 @@ async function createPeerConnection() {
   myPeerConnection = new RTCPeerConnection({
     iceServers: [     // Information about ICE servers - Use your own!
       {
-        urls: "turn:" + myHostname,  // A TURN server
-        username: "webrtc",
-        credential: "turnserver"
+        urls: ['stun:stun.l.google.com:19302']
+        // urls: "turn:" + myHostname,  // A TURN server
+        // username: "webrtc",
+        // credential: "turnserver"
       }
     ]
   });
 
   // Set up event handlers for the ICE negotiation process.
 
+  // myPeerConnection.onicecandidate is called when myself's ice candidate (reflected ip) is found out by webrtc framework 
   myPeerConnection.onicecandidate = handleICECandidateEvent;
   myPeerConnection.oniceconnectionstatechange = handleICEConnectionStateChangeEvent;
   myPeerConnection.onicegatheringstatechange = handleICEGatheringStateChangeEvent;
@@ -250,6 +213,9 @@ async function createPeerConnection() {
 
 async function handleNegotiationNeededEvent() {
   log("*** Negotiation needed");
+}
+
+async function createAndSendOffer() {
 
   try {
     log("---> Creating offer");
@@ -368,32 +334,6 @@ function handleICEGatheringStateChangeEvent(event) {
   log("*** ICE gathering state changed to: " + myPeerConnection.iceGatheringState);
 }
 
-// Given a message containing a list of usernames, this function
-// populates the user list box with those names, making each item
-// clickable to allow starting a video call.
-
-function handleUserlistMsg(msg) {
-  var i;
-  var listElem = document.querySelector(".userlistbox");
-
-  // Remove all current list members. We could do this smarter,
-  // by adding and updating users instead of rebuilding from
-  // scratch but this will do for this sample.
-
-  while (listElem.firstChild) {
-    listElem.removeChild(listElem.firstChild);
-  }
-
-  // Add member names from the received list.
-
-  msg.users.forEach(function(username) {
-    var item = document.createElement("li");
-    item.appendChild(document.createTextNode(username));
-    item.addEventListener("click", invite, false);
-
-    listElem.appendChild(item);
-  });
-}
 
 // Close the RTCPeerConnection and reset variables so that the user can
 // make or receive another call if they wish. This is called both
@@ -401,7 +341,7 @@ function handleUserlistMsg(msg) {
 // failure is detected.
 
 function closeVideoCall() {
-  var localVideo = document.getElementById("local_video");
+  //var localVideo = document.getElementById("local_video");
 
   log("Closing the call");
 
@@ -420,22 +360,26 @@ function closeVideoCall() {
     myPeerConnection.onicegatheringstatechange = null;
     myPeerConnection.onnotificationneeded = null;
 
+    // TODO: close datachannel
+    log("--> Closing data channel");
+    dataChannel.close()
+    
     // Stop all transceivers on the connection
 
-    myPeerConnection.getTransceivers().forEach(transceiver => {
-      transceiver.stop();
-    });
+    // myPeerConnection.getTransceivers().forEach(transceiver => {
+    //   transceiver.stop();
+    // });
 
-    // Stop the webcam preview as well by pausing the <video>
-    // element, then stopping each of the getUserMedia() tracks
-    // on it.
+    // // Stop the webcam preview as well by pausing the <video>
+    // // element, then stopping each of the getUserMedia() tracks
+    // // on it.
 
-    if (localVideo.srcObject) {
-      localVideo.pause();
-      localVideo.srcObject.getTracks().forEach(track => {
-        track.stop();
-      });
-    }
+    // if (localVideo.srcObject) {
+    //   localVideo.pause();
+    //   localVideo.srcObject.getTracks().forEach(track => {
+    //     track.stop();
+    //   });
+    // }
 
     // Close the peer connection
 
@@ -444,9 +388,6 @@ function closeVideoCall() {
     webcamStream = null;
   }
 
-  // Disable the hangup button
-
-  document.getElementById("hangup-button").disabled = true;
   targetUsername = null;
 }
 
@@ -481,13 +422,11 @@ function hangUpCall() {
 // a |notificationneeded| event, so we'll let our handler for that
 // make the offer.
 
-async function invite(evt) {
+async function invite(clickedUsername) {
   log("Starting to prepare an invitation");
   if (myPeerConnection) {
     alert("You can't start a call because you already have one open!");
   } else {
-    var clickedUsername = evt.target.textContent;
-
     // Don't allow users to call themselves, because weird.
 
     if (clickedUsername === myUsername) {
@@ -511,23 +450,57 @@ async function invite(evt) {
     // Get access to the webcam stream and attach it to the
     // "preview" box (id "local_video").
 
-    try {
-      webcamStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
-      document.getElementById("local_video").srcObject = webcamStream;
-    } catch(err) {
-      handleGetUserMediaError(err);
-      return;
-    }
+    // try {
+    //   webcamStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+    //   document.getElementById("local_video").srcObject = webcamStream;
+    // } catch(err) {
+    //   handleGetUserMediaError(err);
+    //   return;
+    // }
 
-    // Add the tracks from the stream to the RTCPeerConnection
+    // // Add the tracks from the stream to the RTCPeerConnection
 
-    try {
-      webcamStream.getTracks().forEach(
-        transceiver = track => myPeerConnection.addTransceiver(track, {streams: [webcamStream]})
-      );
-    } catch(err) {
-      handleGetUserMediaError(err);
-    }
+    // try {
+    //   webcamStream.getTracks().forEach(
+    //     transceiver = track => myPeerConnection.addTransceiver(track, {streams: [webcamStream]})
+    //   );
+    // } catch(err) {
+    //   handleGetUserMediaError(err);
+    // }
+
+    await createAndSendOffer();
+
+    // TODO create data channel
+    // Create the data channel and establish its event listeners
+    dataChannel = myPeerConnection.createDataChannel('dataChannel');
+    console.log('Created dataChannel');
+    dataChannel.onclose = handleSendChannelStatusChange;  
+    dataChannel.onmessage = handleDataChannelMessage;
+    dataChannel.onopen = handleSendChannelStatusChange;
+  }
+}
+
+// Send a message to the remote peer.
+function sendMessage(message) {
+  dataChannel.send(message);
+}
+
+async function handleDataChannelMessage(event) {
+  log("!!!! DataChannel received message: " + event.data)
+}
+
+// Handle status changes on the local end of the data
+// channel; this is the end doing the sending of data
+// in this example.
+async function handleSendChannelStatusChange(event) {
+  if (dataChannel) {
+      var state = dataChannel.readyState;
+
+      if (state === "open") {
+        console.log("handleSendChannelStatusChange state==open");
+      } else {
+        console.log("handleSendChannelStatusChange state!=open");
+      }
   }
 }
 
@@ -556,6 +529,8 @@ async function handleVideoOfferMsg(msg) {
   if (myPeerConnection.signalingState != "stable") {
     log("  - But the signaling state isn't stable, so triggering rollback");
 
+    log("  - signalingState:" + myPeerConnection.signalingState);
+
     // Set the local and remove descriptions for rollback; don't proceed
     // until both return.
     await Promise.all([
@@ -570,26 +545,27 @@ async function handleVideoOfferMsg(msg) {
 
   // Get the webcam stream if we don't already have it
 
-  if (!webcamStream) {
-    try {
-      webcamStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
-    } catch(err) {
-      handleGetUserMediaError(err);
-      return;
-    }
+  // if (!webcamStream) {
+  //   try {
+  //     webcamStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+  //   } catch(err) {
+  //     handleGetUserMediaError(err);
+  //     return;
+  //   }
 
-    document.getElementById("local_video").srcObject = webcamStream;
+  //   document.getElementById("local_video").srcObject = webcamStream;
 
-    // Add the camera stream to the RTCPeerConnection
+  //   // Add the camera stream to the RTCPeerConnection
 
-    try {
-      webcamStream.getTracks().forEach(
-        transceiver = track => myPeerConnection.addTransceiver(track, {streams: [webcamStream]})
-      );
-    } catch(err) {
-      handleGetUserMediaError(err);
-    }
-  }
+  //   try {
+  //     webcamStream.getTracks().forEach(
+  //       transceiver = track => myPeerConnection.addTransceiver(track, {streams: [webcamStream]})
+  //     );
+  //   } catch(err) {
+  //     handleGetUserMediaError(err);
+  //   }
+  // }
+
 
   log("---> Creating and sending answer to caller");
 
@@ -601,6 +577,12 @@ async function handleVideoOfferMsg(msg) {
     type: "video-answer",
     sdp: myPeerConnection.localDescription
   });
+
+  // TODO: create data channel
+  // The remote end is set up similarly, except that we don't need to explicitly create an RTCDataChannel ourselves, 
+  // since we're going to be connected through the channel established above. Instead, we set up a datachannel event handler; 
+  // this will be called when the data channel is opened; this handler will receive an RTCDataChannel object; 
+  myPeerConnection.ondatachannel = receiveChannelCallback; 
 }
 
 // Responds to the "video-answer" message sent to the caller
@@ -614,6 +596,24 @@ async function handleVideoAnswerMsg(msg) {
 
   var desc = new RTCSessionDescription(msg.sdp);
   await myPeerConnection.setRemoteDescription(desc).catch(reportError);
+}
+
+function receiveChannelCallback(event) {
+  dataChannel = event.channel;
+  dataChannel.onmessage = handleReceiveMessage;
+  dataChannel.onopen = handleReceiveChannelStatusChange;
+  dataChannel.onclose = handleReceiveChannelStatusChange;
+}
+
+function handleReceiveChannelStatusChange(event) {
+  if (receiveChannel) {
+    console.log("Receive channel's status has changed to " +
+                receiveChannel.readyState);
+  }
+}
+
+function handleReceiveMessage(event) {
+  console.log("~~~~~~~~~~Receive message!" + event.data);
 }
 
 // A new ICE candidate has been received from the other peer. Call
@@ -638,27 +638,27 @@ async function handleNewICECandidateMsg(msg) {
 // they simply opted not to share their media, that's not really an
 // error, so we won't present a message in that situation.
 
-function handleGetUserMediaError(e) {
-  log_error(e);
-  switch(e.name) {
-    case "NotFoundError":
-      alert("Unable to open your call because no camera and/or microphone" +
-            "were found.");
-      break;
-    case "SecurityError":
-    case "PermissionDeniedError":
-      // Do nothing; this is the same as the user canceling the call.
-      break;
-    default:
-      alert("Error opening your camera and/or microphone: " + e.message);
-      break;
-  }
+// function handleGetUserMediaError(e) {
+//   log_error(e);
+//   switch(e.name) {
+//     case "NotFoundError":
+//       alert("Unable to open your call because no camera and/or microphone" +
+//             "were found.");
+//       break;
+//     case "SecurityError":
+//     case "PermissionDeniedError":
+//       // Do nothing; this is the same as the user canceling the call.
+//       break;
+//     default:
+//       alert("Error opening your camera and/or microphone: " + e.message);
+//       break;
+//   }
 
-  // Make sure we shut down our end of the RTCPeerConnection so we're
-  // ready to try again.
+//   // Make sure we shut down our end of the RTCPeerConnection so we're
+//   // ready to try again.
 
-  closeVideoCall();
-}
+//   closeVideoCall();
+// }
 
 // Handles reporting errors. Currently, we just dump stuff to console but
 // in a real-world application, an appropriate (and user-friendly)

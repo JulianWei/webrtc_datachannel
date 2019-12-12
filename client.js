@@ -1,26 +1,26 @@
-const signalingServer = require('./wss.js')
-const webrtcConnection = require('./connection.js')
+'use strict';
 
+const chatClient = require('./chatclient.js')
 
-var myUsername = process.argv[2]
-var targetUsername = process.argv[3]
+async function connectToWebSocketServer(myName) {
+    await chatClient.connect(myName);
+    console.log("Connected to web socket server.");
+}
 
+async function call(targetUserName) {
+    await chatClient.invite(targetUserName);
+}
 
-signalingServer.connect(myUsername)
-.then(function(server) {
-    // signal server is connected
-    webrtcConnection.call(myUsername, targetUsername, signalingServer)
-}).catch(function(err) {
-    // error here
-});
+async function connectAndCall(myName, targetUserName) {
+    await chatClient.connect(myName);
+    console.log("----------------- onnected to web socket server.");
 
-// async function connectToSigallingServer(myUsername) {
-//     try {
-//         await signalingServer.connect(myUsername)
-//         // now signallingServer is connected
-//     } catch (error) {
-//         console.log("Error while connecting to sigalling server ", error)
-//     }
-//   };
-// connectToSigallingServer(myUsername)
-// call(targetUsername)
+    await chatClient.invite(targetUserName);
+    console.log("---------------- Established P2P.");
+
+    chatClient.sendMessage("Greeting from C1 ~");
+}
+
+// connectToWebSocketServer("C1")
+// call("Skyroam01")
+connectAndCall("C1", "Skyroam01")
