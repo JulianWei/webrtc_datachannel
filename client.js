@@ -15,10 +15,10 @@ async function connectAndCall(myName, targetUserName) {
     await chatClient.connect(myName);
     console.log("----------------- onnected to web socket server.");
 
-    await chatClient.invite(targetUserName);
-    console.log("---------------- Established P2P.");
-
-    chatClient.sendMessage("Greeting from C1 ~");
+    await chatClient.invite(targetUserName, function() {
+        console.log("---------------- Established P2P.");
+        chatClient.sendMessage("Greeting from C1 ~");
+    });
 }
 
 // connectToWebSocketServer("C1")

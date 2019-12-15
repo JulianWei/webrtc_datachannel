@@ -25,6 +25,9 @@ var RTCPeerConnection = wrtc.RTCPeerConnection;
 var RTCSessionDescription = wrtc.RTCSessionDescription;
 var RTCIceCandidate = wrtc.RTCIceCandidate;
 
+var _webrtcDataChannelReadyCallback = null;
+var _receiveMessageCallback = null;
+
 
 
 // Get our hostname
@@ -385,7 +388,6 @@ function closeVideoCall() {
 
     myPeerConnection.close();
     myPeerConnection = null;
-    webcamStream = null;
   }
 
   targetUsername = null;
@@ -422,7 +424,7 @@ function hangUpCall() {
 // a |notificationneeded| event, so we'll let our handler for that
 // make the offer.
 
-async function invite(clickedUsername) {
+async function invite(clickedUsername, webrtcDataChannelReadyCallback) {
   log("Starting to prepare an invitation");
   if (myPeerConnection) {
     alert("You can't start a call because you already have one open!");
@@ -438,6 +440,7 @@ async function invite(clickedUsername) {
 
     targetUsername = clickedUsername;
     log("Inviting user " + targetUsername);
+    _webrtcDataChannelReadyCallback = webrtcDataChannelReadyCallback;
 
     // Call createPeerConnection() to create the RTCPeerConnection.
     // When this returns, myPeerConnection is our RTCPeerConnection
@@ -468,7 +471,6 @@ async function invite(clickedUsername) {
     //   handleGetUserMediaError(err);
     // }
 
-    await createAndSendOffer();
 
     // TODO create data channel
     // Create the data channel and establish its event listeners
@@ -477,6 +479,10 @@ async function invite(clickedUsername) {
     dataChannel.onclose = handleSendChannelStatusChange;  
     dataChannel.onmessage = handleDataChannelMessage;
     dataChannel.onopen = handleSendChannelStatusChange;
+
+
+    await createAndSendOffer();
+
   }
 }
 
@@ -495,9 +501,11 @@ async function handleDataChannelMessage(event) {
 async function handleSendChannelStatusChange(event) {
   if (dataChannel) {
       var state = dataChannel.readyState;
+      console.log("handleSendChannelStatusChange state=="+ state);
 
       if (state === "open") {
         console.log("handleSendChannelStatusChange state==open");
+        _webrtcDataChannelReadyCallback(dataChannel)
       } else {
         console.log("handleSendChannelStatusChange state!=open");
       }
@@ -567,6 +575,12 @@ async function handleVideoOfferMsg(msg) {
   // }
 
 
+  // TODO: create data channel
+  // The remote end is set up similarly, except that we don't need to explicitly create an RTCDataChannel ourselves, 
+  // since we're going to be connected through the channel established above. Instead, we set up a datachannel event handler; 
+  // this will be called when the data channel is opened; this handler will receive an RTCDataChannel object; 
+  myPeerConnection.ondatachannel = receiveChannelCallback; 
+
   log("---> Creating and sending answer to caller");
 
   await myPeerConnection.setLocalDescription(await myPeerConnection.createAnswer());
@@ -578,11 +592,7 @@ async function handleVideoOfferMsg(msg) {
     sdp: myPeerConnection.localDescription
   });
 
-  // TODO: create data channel
-  // The remote end is set up similarly, except that we don't need to explicitly create an RTCDataChannel ourselves, 
-  // since we're going to be connected through the channel established above. Instead, we set up a datachannel event handler; 
-  // this will be called when the data channel is opened; this handler will receive an RTCDataChannel object; 
-  myPeerConnection.ondatachannel = receiveChannelCallback; 
+  
 }
 
 // Responds to the "video-answer" message sent to the caller
@@ -606,9 +616,9 @@ function receiveChannelCallback(event) {
 }
 
 function handleReceiveChannelStatusChange(event) {
-  if (receiveChannel) {
+  if (dataChannel) {
     console.log("Receive channel's status has changed to " +
-                receiveChannel.readyState);
+                dataChannel.readyState);
   }
 }
 
